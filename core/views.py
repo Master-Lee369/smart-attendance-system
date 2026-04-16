@@ -24,7 +24,7 @@ def student_login(request):
         if hasattr(request.user, 'student_profile'):
             return redirect('dashboard')
         elif request.user.is_staff:
-            return redirect('/admin/')
+            return redirect('admin_dashboard')
         logout(request)
     
     if request.method == 'POST':
@@ -62,7 +62,7 @@ def dashboard(request):
     except (Student.DoesNotExist, AttributeError):
         # Not a student - if admin, redirect to admin
         if request.user.is_staff:
-            return redirect('/admin/')
+            return redirect('admin_dashboard')
         messages.error(request, "You don't have a student profile. Please contact admin.")
         logout(request)
         return redirect('login')
@@ -613,7 +613,7 @@ def teacher_login(request):
         elif hasattr(request.user, 'student_profile'):
             return redirect('dashboard')
         elif request.user.is_staff:
-            return redirect('/admin/')
+            return redirect('admin_dashboard')
         logout(request)
     
     if request.method == 'POST':
@@ -1060,3 +1060,83 @@ def teacher_cancel_lectures(request):
     }
     
     return render(request, 'core/teacher/cancel_lectures.html', context)
+
+
+@login_required
+def admin_dashboard(request):
+    """
+    Custom Admin Dashboard for system overview.
+    Only accessible by staff/superusers.
+    """
+    if not request.user.is_staff:
+        messages.error(request, "Access denied. Admin only.")
+        return redirect('login')
+    
+    # System-wide statistics
+    total_students = Student.objects.count()
+    total_teachers = Teacher.objects.count()
+    total_rooms = Room.objects.count()
+    total_classrooms = Classroom.objects.count()
+    total_subjects = Subject.objects.count()
+    
+    # Today's statistics
+    today = timezone.now().date()
+    lectures_today = Lecture.objects.filter(date=today)
+    total_lectures_today = lectures_today.count()
+    active_lectures = lectures_today.filter(status='active')
+    completed_today = lectures_today.filter(status='completed')
+    
+    # Overall attendance rate for today
+    total_attendance_records = Attendance.objects.filter(lecture__date=today).count()
+    present_today = Attendance.objects.filter(lecture__date=today, status='present').count()
+    attendance_rate = (present_today / total_attendance_records * 100) if total_attendance_records > 0 else 0
+    
+    # Room status
+    rooms = Room.objects.all()
+    room_status = []
+    for room in rooms:
+        # Check if any active lecture is in this room
+        current_lecture = active_lectures.filter(timetable__room=room).first()
+        room_status.append({
+            'room': room,
+            'active_lecture': current_lecture,
+            'is_busy': current_lecture is not None
+        })
+    
+    # Recent activity (latest attendance marks)
+    recent_marks = Attendance.objects.filter(status='present').select_related(
+        'student', 'lecture', 'lecture__timetable__subject'
+    ).order_by('-marked_at')[:10]
+    
+    # Classroom attendance summary
+    classrooms = Classroom.objects.all()
+    classroom_stats = []
+    for classroom in classrooms:
+        cls_records = Attendance.objects.filter(student__classroom=classroom)
+        total = cls_records.count()
+        present = cls_records.filter(status='present').count()
+        rate = (present / total * 100) if total > 0 else 0
+        classroom_stats.append({
+            'classroom': classroom,
+            'total': total,
+            'present': present,
+            'rate': round(rate, 1)
+        })
+
+    context = {
+        'total_students': total_students,
+        'total_teachers': total_teachers,
+        'total_rooms': total_rooms,
+        'total_classrooms': total_classrooms,
+        'total_subjects': total_subjects,
+        'total_lectures_today': total_lectures_today,
+        'active_lectures_count': active_lectures.count(),
+        'completed_today_count': completed_today.count(),
+        'attendance_rate': round(attendance_rate, 1),
+        'room_status': room_status,
+        'recent_marks': recent_marks,
+        'classroom_stats': sorted(classroom_stats, key=lambda x: x['rate'], reverse=True),
+        'today': today,
+    }
+    
+    return render(request, 'core/admin/dashboard.html', context)

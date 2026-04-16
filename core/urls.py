@@ -34,4 +34,7 @@ urlpatterns = [
     path('api/start-lecture/', views.api_start_lecture, name='api_start_lecture'),
     path('api/end-lecture/', views.api_end_lecture, name='api_end_lecture'),
     path('api/schedule/<int:classroom_id>/', views.api_get_todays_schedule, name='api_schedule'),
+    
+    # Admin Dashboard
+    path('admin-dashboard/', views.admin_dashboard, name='admin_dashboard'),
 ]
