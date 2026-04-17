@@ -5,6 +5,8 @@ urlpatterns = [
     # Auth URLs
     path('', views.student_login, name='login'),
     path('login/', views.student_login, name='login'),
+    path('register/', views.student_register, name='student_register'),
+    path('register/teacher/', views.teacher_register, name='teacher_register'),
     path('logout/', views.logout_view, name='logout'),
     
     # Student Dashboard

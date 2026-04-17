@@ -15,7 +15,8 @@ from django.conf import settings
 from datetime import datetime, timedelta
 
 from .models import Student, Classroom, Timetable, Lecture, Attendance, Subject, Teacher, Room, CancelledLecture
-from .forms import StudentLoginForm, PhotoUploadForm, TeacherLoginForm, ScheduleExtraLectureForm
+from .forms import StudentLoginForm, PhotoUploadForm, TeacherLoginForm, ScheduleExtraLectureForm, StudentRegistrationForm, TeacherRegistrationForm
+from django.contrib.auth.models import User
 
 
 def student_login(request):
@@ -39,6 +40,77 @@ def student_login(request):
         form = StudentLoginForm()
     
     return render(request, 'core/login.html', {'form': form})
+
+
+def student_register(request):
+    """Registration view for new students"""
+    if request.user.is_authenticated:
+        return redirect('dashboard')
+
+    if request.method == 'POST':
+        form = StudentRegistrationForm(request.POST)
+        if form.is_valid():
+            name = form.cleaned_data['name']
+            division = form.cleaned_data['division']
+            roll_no = form.cleaned_data['roll_no']
+            password = form.cleaned_data['password']
+
+            full_roll_no = f"{division}-{roll_no.zfill(3)}"
+            username = f"student_{full_roll_no}"
+
+            user = User.objects.create_user(username=username, password=password)
+            classroom = Classroom.objects.get(name=division)
+            student = Student.objects.create(
+                user=user,
+                roll_no=full_roll_no,
+                name=name,
+                classroom=classroom,
+                face_folder_name=f"{division}_{full_roll_no}",
+            )
+
+            # Create known_faces folder for the student
+            face_dir = os.path.join(settings.BASE_DIR, 'known_faces', student.face_folder_name)
+            os.makedirs(face_dir, exist_ok=True)
+
+            login(request, user)
+            messages.success(request, f'Account created! Welcome, {name}!')
+            return redirect('dashboard')
+    else:
+        form = StudentRegistrationForm()
+
+    return render(request, 'core/register_student.html', {'form': form})
+
+
+def teacher_register(request):
+    """Registration view for new teachers"""
+    if request.user.is_authenticated:
+        return redirect('teacher_dashboard')
+
+    if request.method == 'POST':
+        form = TeacherRegistrationForm(request.POST)
+        if form.is_valid():
+            name = form.cleaned_data['name']
+            email = form.cleaned_data['email']
+            password = form.cleaned_data['password']
+
+            username = f"teacher_{email.split('@')[0]}"
+            # Ensure unique username
+            base_username = username
+            counter = 1
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}_{counter}"
+                counter += 1
+
+            user = User.objects.create_user(username=username, email=email, password=password)
+            Teacher.objects.create(user=user, name=name, email=email)
+
+            login(request, user)
+            messages.success(request, f'Account created! Welcome, {name}!')
+            return redirect('teacher_dashboard')
+    else:
+        form = TeacherRegistrationForm()
+
+    return render(request, 'core/register_teacher.html', {'form': form})
 
 
 def logout_view(request):
@@ -226,6 +298,75 @@ def attendance_history(request):
     return render(request, 'core/attendance_history.html', context)
 
 
+def _retrain_face_model():
+    """Retrain the LBPH face model from all known_faces. Called after photo upload."""
+    try:
+        import cv2
+        import numpy as np
+        import pickle
+
+        known_faces_dir = os.path.join(settings.BASE_DIR, 'known_faces')
+        model_path = os.path.join(settings.BASE_DIR, 'face_model.yml')
+        labels_path = os.path.join(settings.BASE_DIR, 'face_labels.pkl')
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+        faces = []
+        labels = []
+        label_to_name = {}
+        name_to_label = {}
+        current_label = 0
+
+        for person_name in sorted(os.listdir(known_faces_dir)):
+            person_dir = os.path.join(known_faces_dir, person_name)
+            if not os.path.isdir(person_dir):
+                continue
+
+            person_faces = []
+            for image_name in os.listdir(person_dir):
+                if not image_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    continue
+                image_path = os.path.join(person_dir, image_name)
+                image = cv2.imread(image_path)
+                if image is None:
+                    continue
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                detected = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+                if len(detected) == 0:
+                    # If no face detected with cascade, use the whole image as face
+                    face_roi = cv2.resize(gray, (200, 200))
+                    face_roi = clahe.apply(face_roi)
+                    face_roi = cv2.GaussianBlur(face_roi, (3, 3), 0)
+                    person_faces.append(face_roi)
+                else:
+                    for (x, y, w, h) in detected:
+                        face_roi = gray[y:y+h, x:x+w]
+                        face_roi = cv2.resize(face_roi, (200, 200))
+                        face_roi = clahe.apply(face_roi)
+                        face_roi = cv2.GaussianBlur(face_roi, (3, 3), 0)
+                        person_faces.append(face_roi)
+
+            if person_faces:
+                name_to_label[person_name] = current_label
+                label_to_name[current_label] = person_name
+                for face in person_faces:
+                    faces.append(face)
+                    labels.append(current_label)
+                current_label += 1
+
+        if len(faces) < 1:
+            return
+
+        recognizer = cv2.face.LBPHFaceRecognizer_create(radius=2, neighbors=16, grid_x=8, grid_y=8)
+        recognizer.train(faces, np.array(labels))
+        recognizer.write(model_path)
+        with open(labels_path, 'wb') as f:
+            pickle.dump((label_to_name, name_to_label), f)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+
+
 @login_required
 def upload_photo(request):
     """Handle photo uploads for face recognition"""
@@ -266,6 +407,9 @@ def upload_photo(request):
             # Update face_folder_name to match the new format
             student.face_folder_name = folder_name
             student.save()
+            
+            # Retrain the face recognition model with all known faces
+            _retrain_face_model()
             
             messages.success(request, f'{photo_type.title()} photo uploaded successfully!')
             
@@ -315,6 +459,10 @@ def delete_photo(request):
                     os.remove(full_path)
             
             student.save()
+            
+            # Retrain model after photo deletion
+            _retrain_face_model()
+            
             messages.success(request, f'{photo_type.title()} photo deleted successfully!')
         else:
             messages.error(request, 'Invalid photo type')

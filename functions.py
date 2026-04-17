@@ -46,6 +46,10 @@ class FaceRecognizer:
         self.is_trained = False
         # CLAHE for lighting normalization
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        # Consistency tracking: require same person N times in a row
+        self.recognition_history = {}  # face_position_key -> [list of recent names]
+        self.confirmed_faces = {}  # face_position_key -> confirmed name
+        self.CONFIRM_FRAMES = 5  # Must be same person for 5 frames
     
     def preprocess_face(self, gray_face):
         """Apply preprocessing to normalize lighting variations."""
@@ -156,17 +160,19 @@ class FaceRecognizer:
                 print(f"Error loading model: {e}")
         return False
     
-    def recognize_faces(self, frame, confidence_threshold=70):
+    def recognize_faces(self, frame, confidence_threshold=140):
         """
-        Recognize faces in a frame.
+        Recognize faces in a frame with consistency checking.
+        A face must be recognized as the same person for multiple consecutive 
+        frames before being confirmed - prevents false matches.
         
         Args:
             frame: BGR image from OpenCV (video frame)
-            confidence_threshold: Lower value = stricter matching (0-100, lower is more confident)
+            confidence_threshold: LBPH confidence cutoff (lower = stricter)
         
         Returns:
             frame: Image with rectangles and names drawn on recognized faces
-            recognized_names: List of names recognized in this frame
+            recognized_names: List of CONFIRMED names recognized in this frame
         """
         recognized_names = []
         
@@ -177,10 +183,17 @@ class FaceRecognizer:
             gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
         )
         
+        # Track which position keys are active this frame
+        active_keys = set()
+        
         for (x, y, w, h) in detected_faces:
             name = "Unknown"
             label_text = "Unknown"
             color = (0, 0, 255)  # Red for unknown
+            
+            # Create a rough position key (quantized to 50px grid) for tracking
+            pos_key = (x // 50, y // 50)
+            active_keys.add(pos_key)
             
             # Extract face regions
             face_roi_gray = gray[y:y+h, x:x+w]
@@ -190,27 +203,46 @@ class FaceRecognizer:
             liveness = anti_spoofing.check_liveness(face_roi_color)
             
             if not liveness['is_live']:
-                # It's a spoof!
                 name = "FAKE / SPOOF"
                 label_text = f"SPOOF ({liveness['spoof_type']})"
-                color = (0, 0, 255)  # Red for spoof
-                # Do NOT add to recognized_names so attendance isn't marked
+                color = (0, 0, 255)
             elif self.is_trained:
-                # It's real, proceed with recognition
                 face_roi = cv2.resize(face_roi_gray, (200, 200))
-                # Apply same preprocessing as training
                 face_roi = self.preprocess_face(face_roi)
                 
-                # Predict
                 label, confidence = self.recognizer.predict(face_roi)
+                best_name = self.label_to_name.get(label, "Unknown")
                 
-                # Lower confidence = better match in LBPH
-                # Increased threshold since preprocessing makes matching more consistent
                 if confidence < confidence_threshold:
-                    name = self.label_to_name.get(label, "Unknown")
-                    recognized_names.append(name)
-                    color = (0, 255, 0)  # Green for recognized
-                    label_text = name  # Just show the name, no percentage
+                    # Add to history for this position
+                    if pos_key not in self.recognition_history:
+                        self.recognition_history[pos_key] = []
+                    self.recognition_history[pos_key].append(best_name)
+                    # Keep only last N entries
+                    self.recognition_history[pos_key] = self.recognition_history[pos_key][-self.CONFIRM_FRAMES:]
+                    
+                    history = self.recognition_history[pos_key]
+                    
+                    # Check if already confirmed
+                    if pos_key in self.confirmed_faces:
+                        name = self.confirmed_faces[pos_key]
+                        recognized_names.append(name)
+                        color = (0, 255, 0)  # Green for confirmed
+                        label_text = f"{name} ({confidence:.0f})"
+                    elif len(history) >= self.CONFIRM_FRAMES and len(set(history)) == 1:
+                        # Same person for N consecutive frames - CONFIRMED
+                        name = best_name
+                        self.confirmed_faces[pos_key] = name
+                        recognized_names.append(name)
+                        color = (0, 255, 0)  # Green for confirmed
+                        label_text = f"{name} ({confidence:.0f})"
+                    else:
+                        # Not yet confirmed - show as verifying (yellow)
+                        color = (0, 255, 255)  # Yellow for verifying
+                        progress = len(history)
+                        label_text = f"Verifying... {progress}/{self.CONFIRM_FRAMES}"
+                else:
+                    label_text = f"Unknown ({confidence:.0f})"
             
             # Draw rectangle around face
             cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
@@ -219,6 +251,12 @@ class FaceRecognizer:
             cv2.rectangle(frame, (x, y+h), (x+w, y+h+35), color, cv2.FILLED)
             cv2.putText(frame, label_text, (x+6, y+h+25), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+        
+        # Clean up stale tracking for faces that left the frame
+        stale = [k for k in self.recognition_history if k not in active_keys]
+        for k in stale:
+            del self.recognition_history[k]
+            self.confirmed_faces.pop(k, None)
         
         return frame, recognized_names
     

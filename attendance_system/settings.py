@@ -15,7 +15,7 @@ SECRET_KEY = 'django-insecure-face-recognition-attendance-system-dev-key-change-
 DEBUG = True
 
 ALLOWED_HOSTS = ['localhost', '127.0.0.1']
-
+#ALLOWED_HOSTS = ['*']  # Allow all hosts for development; change in production
 # Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',

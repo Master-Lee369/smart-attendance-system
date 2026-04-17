@@ -62,7 +62,7 @@ def run_face_recognition():
     print("Controls: 'q' to quit, 'c' to capture face, 'r' to retrain")
     print("-"*60)
     
-    video = cv2.VideoCapture(room.camera_index)
+    video = cv2.VideoCapture(room.camera_index, cv2.CAP_DSHOW)
     
     if not video.isOpened():
         print(f"Error: Could not open camera {room.camera_index}")
@@ -73,6 +73,13 @@ def run_face_recognition():
     active_timetable = None
     marked_in_session = set()
     last_check_time = None
+    last_model_mtime = None
+    attendance_flash = {}  # {name: timestamp} for green flash overlay
+    
+    # Track model file modification time for auto-reload
+    model_file = os.path.join("face_model.yml")
+    if os.path.exists(model_file):
+        last_model_mtime = os.path.getmtime(model_file)
     
     def get_current_timetable_entry():
         """Get the timetable entry for the current time slot in this room."""
@@ -175,6 +182,15 @@ def run_face_recognition():
         # Check timetable every second
         if last_check_time is None or (now - last_check_time).total_seconds() >= 1:
             last_check_time = now
+            
+            # Auto-reload model if it was retrained by the web server
+            if os.path.exists(model_file):
+                current_mtime = os.path.getmtime(model_file)
+                if last_model_mtime is None or current_mtime != last_model_mtime:
+                    print("\n🔄 Face model updated, reloading...")
+                    face_recognizer.load_model()
+                    last_model_mtime = current_mtime
+            
             current_timetable = get_current_timetable_entry()
             
             # Debug print
@@ -211,12 +227,31 @@ def run_face_recognition():
                         if result.get('success'):
                             if not result.get('already_marked'):
                                 print(f"✓ ATTENDANCE: {result.get('student_name', name)} marked PRESENT for {active_lecture.timetable.classroom.name}")
+                                attendance_flash[result.get('student_name', name)] = time_module.time()
                             marked_in_session.add(name)
                         else:
                             # Only print once per face per session
                             if name not in marked_in_session:
                                 print(f"✗ {result.get('message')}")
                                 marked_in_session.add(name)
+        
+        # Draw green attendance banner for recently marked students
+        flash_y = frame.shape[0] - 20
+        current_time_sec = time_module.time()
+        expired = []
+        for sname, flash_time in attendance_flash.items():
+            elapsed = current_time_sec - flash_time
+            if elapsed < 5.0:  # Show for 5 seconds
+                # Green banner at bottom
+                text = f"ATTENDANCE MARKED: {sname}"
+                text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
+                cv2.rectangle(frame, (0, flash_y - 35), (text_size[0] + 20, flash_y + 5), (0, 180, 0), cv2.FILLED)
+                cv2.putText(frame, text, (10, flash_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                flash_y -= 45
+            else:
+                expired.append(sname)
+        for sname in expired:
+            del attendance_flash[sname]
         
         # Display info on frame
         if active_lecture:
@@ -341,6 +376,10 @@ def run_auto_attendance(room_name=None):
     marked_in_session = set()
     camera_active = False
     current_classroom = None  # Track which classroom is currently being attended
+    
+    # Track model file for auto-reload
+    auto_model_file = os.path.join("face_model.yml")
+    auto_last_model_mtime = os.path.getmtime(auto_model_file) if os.path.exists(auto_model_file) else None
     
     def get_next_lecture_info():
         """Get the next upcoming lecture from timetable FOR THIS ROOM"""
@@ -581,6 +620,14 @@ def run_auto_attendance(room_name=None):
             
             # Process camera frame if active
             if camera_active and video:
+                # Auto-reload model if retrained by web server
+                if os.path.exists(auto_model_file):
+                    cur_mtime = os.path.getmtime(auto_model_file)
+                    if auto_last_model_mtime is None or cur_mtime != auto_last_model_mtime:
+                        print("\n🔄 Face model updated, reloading...")
+                        face_recognizer.load_model()
+                        auto_last_model_mtime = cur_mtime
+                
                 check, frame = video.read()
                 
                 if check:

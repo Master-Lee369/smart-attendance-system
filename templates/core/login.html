@@ -46,8 +46,13 @@
                     </div>
                 </form>
             </div>
-            <div class="card-footer text-center text-muted py-3">
-                <a href="{% url 'teacher_login' %}" class="text-success">
+            <div class="card-footer text-center py-3">
+                <span class="text-muted">Don't have an account?</span>
+                <a href="{% url 'student_register' %}" class="text-primary fw-bold">
+                    <i class="bi bi-person-plus"></i> Register
+                </a>
+                <br>
+                <a href="{% url 'teacher_login' %}" class="text-success mt-2 d-inline-block">
                     <i class="bi bi-person-workspace"></i> Teacher Login
                 </a>
             </div>

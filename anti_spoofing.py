@@ -10,12 +10,12 @@ class AntiSpoofingDetector:
     
     def __init__(self, config=None):
         self.config = {
-            'specular_threshold': 0.005,      # % of very bright pixels
-            'specular_intensity': 215,        # Brightness threshold
-            'edge_sharpness_max': 45,         # Max edge density
-            'color_blue_shift_max': 1.05,     # Blue channel ratio
-            'reflection_variance_min': 50,    # Min brightness variance
-            'min_checks_to_fail': 2,          # Only need 1 failed check to mark spoof
+            'specular_threshold': 0.008,      # % of very bright pixels (relaxed)
+            'specular_intensity': 225,        # Brightness threshold (relaxed)
+            'edge_sharpness_max': 55,         # Max edge density (relaxed)
+            'color_blue_shift_max': 1.08,     # Blue channel ratio (relaxed)
+            'reflection_variance_min': 40,    # Min brightness variance (relaxed)
+            'min_checks_to_fail': 3,          # Need 3 failed checks to mark spoof
             'enabled': True
         }
         
